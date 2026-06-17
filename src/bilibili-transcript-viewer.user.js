@@ -84,7 +84,9 @@
         top: 18px;
         right: 18px;
         z-index: 999999;
-        width: min(390px, calc(100vw - 36px));
+        width: 390px;
+        height: auto;
+        max-width: calc(100vw - 36px);
         max-height: calc(100vh - 36px);
         display: flex;
         flex-direction: column;
@@ -260,6 +262,48 @@
         background: rgba(255,255,255,0.58);
         color: #6f5a46;
         font-size: 13px;
+      }
+
+      #${PANEL_ID} .bili-capture-item-container {
+        display: grid;
+        grid-template-columns: 1fr 32px;
+        gap: 6px;
+        align-items: stretch;
+      }
+
+      #${PANEL_ID} .bili-capture-delete-btn {
+        padding: 0;
+        background: rgba(220, 100, 80, 0.12);
+        border: 1px solid rgba(220, 100, 80, 0.28);
+        border-radius: 8px;
+        color: #c64c3c;
+        font-size: 18px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      #${PANEL_ID} .bili-capture-delete-btn:hover {
+        background: rgba(220, 100, 80, 0.22);
+        border-color: rgba(220, 100, 80, 0.48);
+      }
+
+      #${PANEL_ID} .bili-capture-delete-btn:active {
+        background: rgba(220, 100, 80, 0.32);
+      }
+
+      #${PANEL_ID}::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        right: 0;
+        width: 16px;
+        height: 16px;
+        cursor: se-resize;
+        background: linear-gradient(135deg, transparent 50%, rgba(124, 93, 59, 0.3) 50%);
       }
 
       #${PANEL_ID} .bili-transcript-line {
@@ -462,6 +506,9 @@
     }
 
     state.captureItems.forEach((item, index) => {
+      const container = document.createElement('div');
+      container.className = 'bili-capture-item-container';
+
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'bili-capture-card';
@@ -494,7 +541,22 @@
         state.video.currentTime = item.time;
         state.video.pause();
       });
-      list.appendChild(row);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'bili-capture-delete-btn';
+      deleteBtn.textContent = '×';
+      deleteBtn.title = '删除此画面';
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        state.captureItems.splice(index, 1);
+        renderCaptureList(panel);
+        setCaptureStatus(panel, `已删除一张画面，当前有 ${state.captureItems.length} 张。`);
+      });
+
+      container.appendChild(row);
+      container.appendChild(deleteBtn);
+      list.appendChild(container);
     });
 
     updateCaptureButtons(panel);
@@ -1205,7 +1267,7 @@
 
     const captureHeading = document.createElement('h2');
     captureHeading.className = 'bili-capture-heading';
-    captureHeading.textContent = '绘本采集';
+    captureHeading.textContent = '动画台词本采集';
 
     const captureControls = document.createElement('div');
     captureControls.className = 'bili-transcript-capture-controls';
@@ -1280,7 +1342,53 @@
     document.body.appendChild(panel);
     renderCaptureList(panel);
     updateCaptureButtons(panel);
+    setupPanelResizing(panel);
     return panel;
+  }
+
+  function setupPanelResizing(panel) {
+    let isResizing = false;
+    let startX = 0;
+    let startY = 0;
+    let startWidth = 0;
+    let startHeight = 0;
+
+    const handleMouseDown = (e) => {
+      // Only trigger if clicking near the bottom-right corner (resize handle area)
+      const rect = panel.getBoundingClientRect();
+      const distFromBottom = rect.bottom - e.clientY;
+      const distFromRight = rect.right - e.clientX;
+      
+      if (distFromBottom < 20 && distFromRight < 20) {
+        isResizing = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        startWidth = panel.offsetWidth;
+        startHeight = panel.offsetHeight;
+        e.preventDefault();
+      }
+    };
+
+    const handleMouseMove = (e) => {
+      if (!isResizing) return;
+
+      const deltaX = e.clientX - startX;
+      const deltaY = e.clientY - startY;
+
+      const newWidth = Math.max(250, startWidth + deltaX);
+      const newHeight = Math.max(200, startHeight + deltaY);
+
+      panel.style.width = newWidth + 'px';
+      panel.style.height = newHeight + 'px';
+    };
+
+    const handleMouseUp = () => {
+      isResizing = false;
+    };
+
+    panel.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
   }
 
   function updatePanelTitle(panel) {
