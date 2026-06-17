@@ -31,6 +31,11 @@
   const CAPTURE_SILENCE_HOLD_SECONDS = 0.55;
   const CAPTURE_PRE_ROLL_MAX_SECONDS = 2.0;
   const CAPTURE_LOOP_INTERVAL_MS = 80;
+  const CAPTURE_SHARPNESS_SAMPLE_INTERVAL_SECONDS = 0.12;
+  const CAPTURE_SHARPNESS_DOWNSCALE_WIDTH = 160;
+  const CAPTURE_SHARPNESS_IMPROVEMENT_RATIO = 1.04;
+  const CAPTURE_PREVIEW_ADJUST_STEP_SECONDS = 0.02;
+  const CAPTURE_PREVIEW_ADJUST_COARSE_STEP_SECONDS = 0.1;
   const PPTX_LIB_URL = 'https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js';
   const CAPTURE_AUDIO_BINDING_KEY = '__biliTranscriptCaptureAudioBinding';
   const CAPTURE_PREVIEW_ID = 'bili-transcript-viewer-capture-preview';
@@ -66,6 +71,8 @@
     captureSegmentPeakLevel: 0,
     captureSegmentSnapshot: null,
     captureSegmentTailSnapshot: null,
+    captureSegmentBestSharpness: 0,
+    captureSegmentLastSharpnessSampleAt: -1,
     captureCapturedPreRoll: false,
     capturePreRollSamples: 0,
     captureFirstVoiceSegmentStarted: false,
@@ -73,6 +80,8 @@
     pptxLibraryPromise: null,
   };
   let capturePreviewTimeOffset = 0;
+  let captureSharpnessCanvas = null;
+  let captureSharpnessContext = null;
 
   function ensureStyles() {
     if (document.getElementById(STYLE_ID)) {
@@ -788,15 +797,15 @@
     adjustBackButton.type = 'button';
     adjustBackButton.className = 'bili-capture-preview-btn';
     adjustBackButton.dataset.previewAction = 'adjust-back';
-    adjustBackButton.textContent = '← 0.1s';
-    adjustBackButton.title = '向前调整 0.1 秒';
+    adjustBackButton.textContent = '← 0.02s';
+    adjustBackButton.title = '向前调整 0.02 秒（按住 Shift 为 0.1 秒）';
 
     const adjustForwardButton = document.createElement('button');
     adjustForwardButton.type = 'button';
     adjustForwardButton.className = 'bili-capture-preview-btn';
     adjustForwardButton.dataset.previewAction = 'adjust-forward';
-    adjustForwardButton.textContent = '0.1s →';
-    adjustForwardButton.title = '向后调整 0.1 秒';
+    adjustForwardButton.textContent = '0.02s →';
+    adjustForwardButton.title = '向后调整 0.02 秒（按住 Shift 为 0.1 秒）';
 
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
@@ -853,13 +862,15 @@
       }
     });
 
-    adjustBackButton.addEventListener('click', () => {
-      capturePreviewTimeOffset -= 0.1;
+    adjustBackButton.addEventListener('click', (event) => {
+      const step = event.shiftKey ? CAPTURE_PREVIEW_ADJUST_COARSE_STEP_SECONDS : CAPTURE_PREVIEW_ADJUST_STEP_SECONDS;
+      capturePreviewTimeOffset = Math.round((capturePreviewTimeOffset - step) * 1000) / 1000;
       syncCapturePreview();
     });
 
-    adjustForwardButton.addEventListener('click', () => {
-      capturePreviewTimeOffset += 0.1;
+    adjustForwardButton.addEventListener('click', (event) => {
+      const step = event.shiftKey ? CAPTURE_PREVIEW_ADJUST_COARSE_STEP_SECONDS : CAPTURE_PREVIEW_ADJUST_STEP_SECONDS;
+      capturePreviewTimeOffset = Math.round((capturePreviewTimeOffset + step) * 1000) / 1000;
       syncCapturePreview();
     });
 
@@ -957,7 +968,7 @@
 
     if (info) {
       const label = item.label || '未命名';
-      const offsetText = capturePreviewTimeOffset !== 0 ? ` (${capturePreviewTimeOffset > 0 ? '+' : ''}${capturePreviewTimeOffset.toFixed(1)}s)` : '';
+      const offsetText = capturePreviewTimeOffset !== 0 ? ` (${capturePreviewTimeOffset > 0 ? '+' : ''}${capturePreviewTimeOffset.toFixed(2)}s)` : '';
       info.textContent = `${state.capturePreviewIndex + 1}/${state.captureItems.length} · ${formatTime(item.time)}${offsetText} · ${label}`;
     }
 
@@ -1110,6 +1121,8 @@
     state.captureSegmentPeakLevel = 0;
     state.captureSegmentSnapshot = null;
     state.captureSegmentTailSnapshot = null;
+    state.captureSegmentBestSharpness = 0;
+    state.captureSegmentLastSharpnessSampleAt = -1;
     state.captureSilenceStartedAt = -1;
 
     if (panel) {
@@ -1277,71 +1290,6 @@
     state.captureSampleBuffer = binding.sampleBuffer;
   }
 
-  function computeImageSharpness(canvas) {
-    const ctx = canvas.getContext('2d');
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-    let lapSum = 0;
-    const step = 4;
-    const width = canvas.width;
-    
-    // Laplacian kernel convolution (simplified for performance)
-    for (let i = step * width; i < data.length - step * width; i += step) {
-      if ((i / 4) % width < 1 || (i / 4) % width >= width - 1) continue;
-      const center = data[i];
-      const up = data[i - step * width];
-      const down = data[i + step * width];
-      const left = data[i - step];
-      const right = data[i + step];
-      const lap = Math.abs(4 * center - up - down - left - right);
-      lapSum += lap;
-    }
-    return lapSum;
-  }
-
-  function captureBestFrame(panel, label, timeOffsets = [-0.04, -0.02, 0, 0.02, 0.04]) {
-    if (!state.video) {
-      throw new Error('当前没有可截图的视频。');
-    }
-
-    const video = state.video;
-    const originalTime = video.currentTime;
-    const snapshots = [];
-    let bestSnapshot = null;
-    let bestSharpness = -1;
-
-    for (const offset of timeOffsets) {
-      const time = Math.max(0, originalTime + offset);
-      video.currentTime = time;
-      
-      try {
-        const snapshot = createCaptureSnapshot(label);
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || CAPTURE_FALLBACK_WIDTH;
-        const aspectRatio = video.videoWidth && video.videoHeight ? video.videoHeight / video.videoWidth : 9 / 16;
-        canvas.height = video.videoHeight || Math.max(720, Math.round(canvas.width * aspectRatio));
-        
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        const sharpness = computeImageSharpness(canvas);
-        snapshots.push({ snapshot, sharpness });
-        
-        if (sharpness > bestSharpness) {
-          bestSharpness = sharpness;
-          bestSnapshot = snapshot;
-        }
-      } catch (err) {
-        console.debug(`frame capture error at offset ${offset}`, err);
-      }
-    }
-
-    video.currentTime = originalTime;
-    return bestSnapshot || createCaptureSnapshot(label);
-  }
-
   function createCaptureSnapshot(label) {
     if (!state.video) {
       throw new Error('当前没有可截图的视频。');
@@ -1390,29 +1338,91 @@
     }
 
     const cue = state.cues[cueIndex];
-    try {
-      const item = captureBestFrame(panel, cue.content);
-      appendCaptureItem(panel, item);
-    } catch (err) {
-      console.debug('cue frame capture error', err);
-    }
+    captureCurrentFrame(panel, cue.content);
     state.captureSeenCueIndices.add(cueIndex);
     setCaptureStatus(panel, `正在按字幕逐句采集，已记录 ${state.captureSeenCueIndices.size} / ${state.cues.length} 句。`);
   }
 
-  function scheduleSpeechCapture(panel) {
+  function computeCurrentFrameSharpness(video) {
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      return 0;
+    }
+
+    const width = CAPTURE_SHARPNESS_DOWNSCALE_WIDTH;
+    const height = Math.max(90, Math.round(width * (video.videoHeight / video.videoWidth)));
+
+    if (!captureSharpnessCanvas) {
+      captureSharpnessCanvas = document.createElement('canvas');
+      captureSharpnessContext = captureSharpnessCanvas.getContext('2d', { willReadFrequently: true });
+    }
+
+    if (!captureSharpnessContext) {
+      return 0;
+    }
+
+    if (captureSharpnessCanvas.width !== width || captureSharpnessCanvas.height !== height) {
+      captureSharpnessCanvas.width = width;
+      captureSharpnessCanvas.height = height;
+    }
+
+    captureSharpnessContext.drawImage(video, 0, 0, width, height);
+    const data = captureSharpnessContext.getImageData(0, 0, width, height).data;
+
+    // Fast edge-energy estimate (sample every other pixel) to approximate frame sharpness.
+    let score = 0;
+    let samples = 0;
+    for (let y = 2; y < height; y += 2) {
+      for (let x = 2; x < width; x += 2) {
+        const idx = (y * width + x) * 4;
+        const leftIdx = idx - 8;
+        const upIdx = idx - width * 4 * 2;
+
+        const luma = (data[idx] * 77 + data[idx + 1] * 150 + data[idx + 2] * 29) >> 8;
+        const lumaLeft = (data[leftIdx] * 77 + data[leftIdx + 1] * 150 + data[leftIdx + 2] * 29) >> 8;
+        const lumaUp = (data[upIdx] * 77 + data[upIdx + 1] * 150 + data[upIdx + 2] * 29) >> 8;
+
+        score += Math.abs(luma - lumaLeft) + Math.abs(luma - lumaUp);
+        samples += 1;
+      }
+    }
+
+    return samples > 0 ? score / samples : 0;
+  }
+
+  function updateSpeechSegmentSnapshot(panel, currentTime, forceCapture) {
+    if (!state.video) {
+      return;
+    }
+
+    const shouldSample = forceCapture
+      || state.captureSegmentLastSharpnessSampleAt < 0
+      || currentTime - state.captureSegmentLastSharpnessSampleAt >= CAPTURE_SHARPNESS_SAMPLE_INTERVAL_SECONDS;
+    if (!shouldSample) {
+      return;
+    }
+
+    state.captureSegmentLastSharpnessSampleAt = currentTime;
+    const sharpness = computeCurrentFrameSharpness(state.video);
+    const needsUpdate = !state.captureSegmentSnapshot
+      || forceCapture
+      || sharpness > state.captureSegmentBestSharpness * CAPTURE_SHARPNESS_IMPROVEMENT_RATIO;
+    if (!needsUpdate) {
+      return;
+    }
+
+    const snapshot = createCaptureSnapshot('speech');
+    state.captureSegmentSnapshot = snapshot;
+    state.captureSegmentPeakTime = snapshot.time;
+    state.captureSegmentBestSharpness = sharpness;
+  }
+
+  function scheduleSpeechCapture(panel, currentTime, forceCapture = false) {
     if (!state.video) {
       return;
     }
 
     try {
-      const snapshot = captureBestFrame(panel, 'speech');
-      if (!state.captureSegmentSnapshot || state.video.currentTime - state.captureLastShotAt >= CAPTURE_MIN_GAP_SECONDS) {
-        state.captureSegmentSnapshot = snapshot;
-      } else {
-        state.captureSegmentSnapshot = snapshot;
-      }
-      state.captureSegmentPeakTime = snapshot.time;
+      updateSpeechSegmentSnapshot(panel, currentTime, forceCapture);
     } catch (error) {
       setCaptureStatus(panel, error instanceof Error ? error.message : '自动截图失败');
       stopAutoCapture(panel);
@@ -1450,6 +1460,8 @@
     state.captureSegmentPeakLevel = 0;
     state.captureSegmentSnapshot = null;
     state.captureSegmentTailSnapshot = null;
+    state.captureSegmentBestSharpness = 0;
+    state.captureSegmentLastSharpnessSampleAt = -1;
   }
 
   function runCaptureLoop(panel) {
@@ -1459,11 +1471,10 @@
 
     const currentTime = state.video ? state.video.currentTime : 0;
 
-    // Capture first 3 pre-roll frames in the first 150ms of video (select best sharpness)
+    // Capture first 3 pre-roll frames in the first 150ms of video
     if (state.captureMode === 'audio' && state.capturePreRollSamples < 3 && currentTime <= 0.15) {
       try {
-        const item = captureBestFrame(panel, 'pre-roll');
-        appendCaptureItem(panel, item);
+        captureCurrentFrame(panel, 'pre-roll');
         state.capturePreRollSamples += 1;
       } catch (err) {
         console.debug('pre-roll frame capture error', err);
@@ -1490,23 +1501,28 @@
         state.captureVoiceActive = true;
         state.captureSegmentStartTime = currentTime;
         state.captureSegmentPeakLevel = level;
+        state.captureSegmentBestSharpness = 0;
+        state.captureSegmentLastSharpnessSampleAt = -1;
         // On first voice segment, capture a few extra frames around the speech boundary
         if (!state.captureFirstVoiceSegmentStarted) {
           state.captureFirstVoiceSegmentStarted = true;
           try {
-            // Sample multiple frames before and at speech start, select best sharpness
+            // Sample 3 frames before and at speech start to capture pre-speech transitions
             for (let i = 0; i < 3; i++) {
-              const item = captureBestFrame(panel, 'pre-speech');
-              appendCaptureItem(panel, item);
+              captureCurrentFrame(panel, 'pre-speech');
             }
           } catch (err) {
             console.debug('pre-speech frame capture error', err);
           }
         }
-        scheduleSpeechCapture(panel);
+        scheduleSpeechCapture(panel, currentTime, true);
       } else if (level >= state.captureSegmentPeakLevel) {
         state.captureSegmentPeakLevel = level;
-        scheduleSpeechCapture(panel);
+        scheduleSpeechCapture(panel, currentTime);
+      }
+
+      if (state.captureVoiceActive) {
+        scheduleSpeechCapture(panel, currentTime);
       }
 
       if (state.captureVoiceActive && currentTime - state.captureSegmentStartTime >= CAPTURE_MAX_SEGMENT_SECONDS) {
@@ -1514,16 +1530,18 @@
         state.captureVoiceActive = true;
         state.captureSegmentStartTime = currentTime;
         state.captureSegmentPeakLevel = level;
+        state.captureSegmentBestSharpness = 0;
+        state.captureSegmentLastSharpnessSampleAt = -1;
         state.captureSilenceStartedAt = -1;
         state.captureSegmentTailSnapshot = null;
-        scheduleSpeechCapture(panel);
+        scheduleSpeechCapture(panel, currentTime, true);
       }
     } else if (state.captureVoiceActive) {
       state.captureSilenceFrames += 1;
       if (state.captureSilenceStartedAt < 0) {
         state.captureSilenceStartedAt = currentTime;
         try {
-          state.captureSegmentTailSnapshot = captureBestFrame(panel, 'speech-tail', [-0.02, 0, 0.02]);
+          state.captureSegmentTailSnapshot = createCaptureSnapshot('speech-tail');
         } catch (_error) {
           state.captureSegmentTailSnapshot = null;
         }
@@ -1573,6 +1591,8 @@
       state.captureSegmentPeakLevel = 0;
       state.captureSegmentSnapshot = null;
       state.captureSegmentTailSnapshot = null;
+      state.captureSegmentBestSharpness = 0;
+      state.captureSegmentLastSharpnessSampleAt = -1;
       state.video = video;
       // Reset video to start position so we can capture pre-roll frames
       video.currentTime = 0;
@@ -1608,6 +1628,8 @@
     state.captureSegmentPeakLevel = 0;
     state.captureSegmentSnapshot = null;
     state.captureSegmentTailSnapshot = null;
+    state.captureSegmentBestSharpness = 0;
+    state.captureSegmentLastSharpnessSampleAt = -1;
     setCaptureStatus(
       panel,
       state.captureItems.length > 0
@@ -1814,8 +1836,7 @@
 
     const snapshotButton = createButton('手动截取', () => {
       try {
-        const item = captureBestFrame(panel, 'manual');
-        appendCaptureItem(panel, item);
+        captureCurrentFrame(panel, 'manual');
       } catch (error) {
         setCaptureStatus(panel, error instanceof Error ? error.message : '手动截图失败');
         updateCaptureButtons(panel);
