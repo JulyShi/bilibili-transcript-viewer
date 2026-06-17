@@ -72,6 +72,7 @@
     capturePreviewIndex: -1,
     pptxLibraryPromise: null,
   };
+  let capturePreviewTimeOffset = 0;
 
   function ensureStyles() {
     if (document.getElementById(STYLE_ID)) {
@@ -783,6 +784,20 @@
     nextButton.dataset.previewAction = 'next';
     nextButton.textContent = '下一张';
 
+    const adjustBackButton = document.createElement('button');
+    adjustBackButton.type = 'button';
+    adjustBackButton.className = 'bili-capture-preview-btn';
+    adjustBackButton.dataset.previewAction = 'adjust-back';
+    adjustBackButton.textContent = '← 0.1s';
+    adjustBackButton.title = '向前调整 0.1 秒';
+
+    const adjustForwardButton = document.createElement('button');
+    adjustForwardButton.type = 'button';
+    adjustForwardButton.className = 'bili-capture-preview-btn';
+    adjustForwardButton.dataset.previewAction = 'adjust-forward';
+    adjustForwardButton.textContent = '0.1s →';
+    adjustForwardButton.title = '向后调整 0.1 秒';
+
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
     deleteButton.className = 'bili-capture-preview-btn is-danger';
@@ -798,6 +813,8 @@
     toolbar.appendChild(info);
     toolbar.appendChild(prevButton);
     toolbar.appendChild(nextButton);
+    toolbar.appendChild(adjustBackButton);
+    toolbar.appendChild(adjustForwardButton);
     toolbar.appendChild(deleteButton);
     toolbar.appendChild(closeButton);
 
@@ -823,6 +840,7 @@
     prevButton.addEventListener('click', () => {
       if (state.capturePreviewIndex > 0) {
         state.capturePreviewIndex -= 1;
+        capturePreviewTimeOffset = 0;
         syncCapturePreview();
       }
     });
@@ -830,8 +848,19 @@
     nextButton.addEventListener('click', () => {
       if (state.capturePreviewIndex < state.captureItems.length - 1) {
         state.capturePreviewIndex += 1;
+        capturePreviewTimeOffset = 0;
         syncCapturePreview();
       }
+    });
+
+    adjustBackButton.addEventListener('click', () => {
+      capturePreviewTimeOffset -= 0.1;
+      syncCapturePreview();
+    });
+
+    adjustForwardButton.addEventListener('click', () => {
+      capturePreviewTimeOffset += 0.1;
+      syncCapturePreview();
     });
 
     deleteButton.addEventListener('click', () => {
@@ -898,15 +927,38 @@
     const image = overlay.querySelector('.bili-capture-preview-image');
     const prevButton = overlay.querySelector('[data-preview-action="prev"]');
     const nextButton = overlay.querySelector('[data-preview-action="next"]');
+    const adjustBackButton = overlay.querySelector('[data-preview-action="adjust-back"]');
+    const adjustForwardButton = overlay.querySelector('[data-preview-action="adjust-forward"]');
+
+    if (adjustBackButton && adjustForwardButton) {
+      adjustBackButton.disabled = !state.video;
+      adjustForwardButton.disabled = !state.video;
+    }
 
     if (image) {
-      image.src = item.imageDataUrl;
+      if (capturePreviewTimeOffset !== 0 && state.video) {
+        const adjustedTime = Math.max(0, item.time + capturePreviewTimeOffset);
+        const originalTime = state.video.currentTime;
+        state.video.currentTime = adjustedTime;
+        try {
+          const adjustedSnapshot = createCaptureSnapshot(`preview-adjust`);
+          image.src = adjustedSnapshot.imageDataUrl;
+        } catch (err) {
+          console.debug('preview adjustment screenshot failed', err);
+          image.src = item.imageDataUrl;
+        }
+        state.video.currentTime = originalTime;
+      } else {
+        image.src = item.imageDataUrl;
+        capturePreviewTimeOffset = 0;
+      }
       image.alt = `画面 ${state.capturePreviewIndex + 1}`;
     }
 
     if (info) {
       const label = item.label || '未命名';
-      info.textContent = `${state.capturePreviewIndex + 1}/${state.captureItems.length} · ${formatTime(item.time)} · ${label}`;
+      const offsetText = capturePreviewTimeOffset !== 0 ? ` (${capturePreviewTimeOffset > 0 ? '+' : ''}${capturePreviewTimeOffset.toFixed(1)}s)` : '';
+      info.textContent = `${state.capturePreviewIndex + 1}/${state.captureItems.length} · ${formatTime(item.time)}${offsetText} · ${label}`;
     }
 
     if (prevButton) {
@@ -934,6 +986,7 @@
       overlay.classList.remove('is-open');
     }
     state.capturePreviewIndex = -1;
+    capturePreviewTimeOffset = 0;
   }
 
   function deleteCaptureItemAt(panel, index) {
