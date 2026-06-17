@@ -33,6 +33,7 @@
   const CAPTURE_LOOP_INTERVAL_MS = 80;
   const PPTX_LIB_URL = 'https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js';
   const CAPTURE_AUDIO_BINDING_KEY = '__biliTranscriptCaptureAudioBinding';
+  const CAPTURE_PREVIEW_ID = 'bili-transcript-viewer-capture-preview';
 
   const state = {
     video: null,
@@ -68,6 +69,7 @@
     captureCapturedPreRoll: false,
     capturePreRollSamples: 0,
     captureFirstVoiceSegmentStarted: false,
+    capturePreviewIndex: -1,
     pptxLibraryPromise: null,
   };
 
@@ -80,6 +82,11 @@
     style.id = STYLE_ID;
     style.textContent = `
       #${PANEL_ID} {
+        --bili-panel-bg: rgba(250, 246, 239, 0.96);
+        --bili-panel-stroke: rgba(124, 93, 59, 0.18);
+        --bili-text-main: #1e1812;
+        --bili-text-subtle: #6f5a46;
+        --bili-accent: #a16a35;
         position: fixed;
         top: 18px;
         right: 18px;
@@ -92,10 +99,13 @@
         flex-direction: column;
         border-radius: 18px;
         overflow: hidden;
-        border: 1px solid rgba(124, 93, 59, 0.18);
-        box-shadow: 0 18px 54px rgba(30, 24, 18, 0.22);
-        background: rgba(247, 243, 235, 0.96);
-        color: #1e1812;
+        border: 1px solid var(--bili-panel-stroke);
+        box-shadow: 0 22px 64px rgba(30, 24, 18, 0.24);
+        background:
+          radial-gradient(130% 60% at 0% 0%, rgba(245, 227, 193, 0.34), transparent 56%),
+          radial-gradient(120% 70% at 100% 0%, rgba(255, 255, 255, 0.42), transparent 50%),
+          var(--bili-panel-bg);
+        color: var(--bili-text-main);
         backdrop-filter: blur(14px);
         font-family: "Source Han Serif SC", "Noto Serif SC", "PingFang SC", serif;
       }
@@ -113,9 +123,11 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 14px 16px;
-        background: linear-gradient(135deg, #e5cfab 0%, #f8efe1 100%);
-        border-bottom: 1px solid rgba(124, 93, 59, 0.14);
+        padding: 14px 16px 13px;
+        background: linear-gradient(140deg, rgba(225, 193, 149, 0.44) 0%, rgba(255, 246, 231, 0.82) 100%);
+        border-bottom: 1px solid rgba(124, 93, 59, 0.16);
+        cursor: move;
+        user-select: none;
       }
 
       #${PANEL_ID} .bili-transcript-title {
@@ -125,6 +137,7 @@
         font-size: 15px;
         line-height: 1.35;
         font-weight: 700;
+        letter-spacing: 0.2px;
       }
 
       #${PANEL_ID} .bili-transcript-body {
@@ -142,15 +155,16 @@
         min-height: 76px;
         padding: 14px;
         border-radius: 14px;
-        border: 1px solid rgba(124, 93, 59, 0.12);
-        background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(255,248,239,0.98));
+        border: 1px solid rgba(124, 93, 59, 0.16);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 248, 239, 0.99));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
         font-size: 24px;
         line-height: 1.5;
       }
 
       #${PANEL_ID} .bili-transcript-current.is-empty,
       #${PANEL_ID} .bili-transcript-status {
-        color: #6f5a46;
+        color: var(--bili-text-subtle);
         font-size: 14px;
       }
 
@@ -162,8 +176,28 @@
 
       #${PANEL_ID} .bili-transcript-capture-controls {
         display: flex;
-        flex-wrap: wrap;
+        flex-direction: column;
         gap: 8px;
+      }
+
+      #${PANEL_ID} .bili-capture-controls-row {
+        display: flex;
+        gap: 8px;
+      }
+
+      #${PANEL_ID} .bili-capture-controls-row button {
+        flex: 1;
+        min-height: 34px;
+      }
+
+      #${PANEL_ID} .bili-capture-controls-row .bili-btn-danger {
+        color: #c64c3c;
+        background: rgba(220, 100, 80, 0.12);
+        border-color: rgba(220, 100, 80, 0.34);
+      }
+
+      #${PANEL_ID} .bili-capture-controls-row .bili-btn-danger:hover {
+        background: rgba(220, 100, 80, 0.22);
       }
 
       #${PANEL_ID} .bili-transcript-select {
@@ -203,7 +237,7 @@
       }
 
       #${PANEL_ID} .bili-capture-status {
-        color: #6f5a46;
+        color: var(--bili-text-subtle);
         font-size: 13px;
         line-height: 1.5;
       }
@@ -213,25 +247,32 @@
         flex-direction: column;
         gap: 8px;
         overflow: auto;
-        max-height: min(34vh, 280px);
+        max-height: min(40vh, 320px);
         padding-right: 4px;
       }
 
       #${PANEL_ID} .bili-capture-card {
         display: grid;
-        grid-template-columns: 92px 1fr;
+        grid-template-columns: 108px 1fr;
         gap: 10px;
         width: 100%;
         padding: 8px;
-        border: 1px solid rgba(124, 93, 59, 0.12);
+        border: 1px solid rgba(124, 93, 59, 0.14);
         border-radius: 12px;
-        background: rgba(255,255,255,0.72);
+        background: rgba(255,255,255,0.82);
         text-align: left;
+        transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+      }
+
+      #${PANEL_ID} .bili-capture-card:hover {
+        border-color: rgba(161, 106, 53, 0.34);
+        transform: translateY(-1px);
+        box-shadow: 0 6px 16px rgba(64, 45, 29, 0.12);
       }
 
       #${PANEL_ID} .bili-capture-thumb {
-        width: 92px;
-        height: 52px;
+        width: 108px;
+        height: 60px;
         border-radius: 8px;
         object-fit: cover;
         background: rgba(56, 39, 25, 0.08);
@@ -295,6 +336,93 @@
         background: rgba(220, 100, 80, 0.32);
       }
 
+      #${CAPTURE_PREVIEW_ID} {
+        position: fixed;
+        inset: 0;
+        z-index: 1000001;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(12, 10, 8, 0.74);
+        padding: 20px;
+      }
+
+      #${CAPTURE_PREVIEW_ID}.is-open {
+        display: flex;
+      }
+
+      #${CAPTURE_PREVIEW_ID} .bili-capture-preview-dialog {
+        width: min(1200px, calc(100vw - 40px));
+        max-height: calc(100vh - 40px);
+        display: flex;
+        flex-direction: column;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        background: rgba(28, 22, 17, 0.96);
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.36);
+        overflow: hidden;
+      }
+
+      #${CAPTURE_PREVIEW_ID} .bili-capture-preview-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      }
+
+      #${CAPTURE_PREVIEW_ID} .bili-capture-preview-info {
+        flex: 1;
+        min-width: 0;
+        color: #f6e8d8;
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      #${CAPTURE_PREVIEW_ID} .bili-capture-preview-btn {
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.1);
+        color: #f4ede6;
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      #${CAPTURE_PREVIEW_ID} .bili-capture-preview-btn:hover {
+        background: rgba(255, 255, 255, 0.18);
+      }
+
+      #${CAPTURE_PREVIEW_ID} .bili-capture-preview-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      #${CAPTURE_PREVIEW_ID} .bili-capture-preview-btn.is-danger {
+        border-color: rgba(246, 120, 104, 0.62);
+        color: #ffd8d3;
+        background: rgba(246, 120, 104, 0.16);
+      }
+
+      #${CAPTURE_PREVIEW_ID} .bili-capture-preview-stage {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 14px;
+        min-height: 0;
+        flex: 1;
+      }
+
+      #${CAPTURE_PREVIEW_ID} .bili-capture-preview-image {
+        max-width: 100%;
+        max-height: calc(100vh - 160px);
+        border-radius: 10px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
+        background: rgba(255, 255, 255, 0.08);
+      }
+
       #${PANEL_ID}::after {
         content: '';
         position: absolute;
@@ -344,22 +472,66 @@
       }
 
       #${PANEL_ID} button {
-        border: none;
+        border: 1px solid rgba(124, 93, 59, 0.2);
         border-radius: 999px;
-        background: rgba(56, 39, 25, 0.08);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(241, 230, 214, 0.62));
         color: #382719;
-        padding: 8px 10px;
+        padding: 8px 11px;
         cursor: pointer;
         font-size: 12px;
+        font-weight: 600;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+        transition: background 0.16s ease, border-color 0.16s ease, transform 0.1s ease;
       }
 
       #${PANEL_ID} button:hover {
-        background: rgba(56, 39, 25, 0.16);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(242, 228, 207, 0.88));
+        border-color: rgba(161, 106, 53, 0.35);
       }
 
       #${PANEL_ID} button:disabled {
         opacity: 0.45;
         cursor: not-allowed;
+        transform: none;
+      }
+
+      #${PANEL_ID} .bili-btn-primary {
+        background: linear-gradient(180deg, #f6e6cb, #edd5ab);
+        border-color: rgba(161, 106, 53, 0.46);
+      }
+
+      #${PANEL_ID} .bili-btn-primary:hover {
+        background: linear-gradient(180deg, #f8ebd5, #f0d9b2);
+      }
+
+      #${PANEL_ID} .bili-btn-stop {
+        background: linear-gradient(180deg, #f8ddcf, #efc6b3);
+        border-color: rgba(200, 98, 74, 0.44);
+        color: #5a261c;
+      }
+
+      #${PANEL_ID} .bili-btn-capture {
+        background: linear-gradient(180deg, #e8f0f8, #d4e4f3);
+        border-color: rgba(85, 120, 160, 0.36);
+        color: #2a3f56;
+      }
+
+      #${PANEL_ID} .bili-btn-export,
+      #${PANEL_ID} .bili-btn-export-html {
+        background: linear-gradient(180deg, #e7f2e6, #d8ead6);
+        border-color: rgba(88, 132, 82, 0.36);
+        color: #2e4f2c;
+      }
+
+      #${PANEL_ID} .bili-capture-list::-webkit-scrollbar,
+      #${PANEL_ID} .bili-transcript-list::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      #${PANEL_ID} .bili-capture-list::-webkit-scrollbar-thumb,
+      #${PANEL_ID} .bili-transcript-list::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: rgba(124, 93, 59, 0.26);
       }
 
       @media (max-width: 960px) {
@@ -379,6 +551,15 @@
 
         #${PANEL_ID} .bili-transcript-current {
           font-size: 20px;
+        }
+
+        #${PANEL_ID} .bili-capture-card {
+          grid-template-columns: 92px 1fr;
+        }
+
+        #${PANEL_ID} .bili-capture-thumb {
+          width: 92px;
+          height: 52px;
         }
       }
     `;
@@ -426,10 +607,27 @@
   }
 
   function savePanelState(panel) {
+    const left = typeof panel.style.left === 'string' && panel.style.left.endsWith('px') ? panel.style.left : null;
+    const top = typeof panel.style.top === 'string' && panel.style.top.endsWith('px') ? panel.style.top : null;
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ collapsed: panel.classList.contains('is-collapsed') })
+      JSON.stringify({
+        collapsed: panel.classList.contains('is-collapsed'),
+        left,
+        top,
+      })
     );
+  }
+
+  function applyPanelPosition(panel, persistedState) {
+    if (!persistedState || typeof persistedState.left !== 'string' || typeof persistedState.top !== 'string') {
+      return;
+    }
+
+    panel.style.left = persistedState.left;
+    panel.style.top = persistedState.top;
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
   }
 
   function clearRetryTimer() {
@@ -534,12 +732,7 @@
       row.appendChild(thumb);
       row.appendChild(meta);
       row.addEventListener('click', () => {
-        if (!state.video) {
-          return;
-        }
-
-        state.video.currentTime = item.time;
-        state.video.pause();
+        openCapturePreview(panel, index);
       });
 
       const deleteBtn = document.createElement('button');
@@ -549,9 +742,7 @@
       deleteBtn.title = '删除此画面';
       deleteBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        state.captureItems.splice(index, 1);
-        renderCaptureList(panel);
-        setCaptureStatus(panel, `已删除一张画面，当前有 ${state.captureItems.length} 张。`);
+        deleteCaptureItemAt(panel, index);
       });
 
       container.appendChild(row);
@@ -560,6 +751,210 @@
     });
 
     updateCaptureButtons(panel);
+  }
+
+  function ensureCapturePreviewOverlay(panel) {
+    const existing = document.getElementById(CAPTURE_PREVIEW_ID);
+    if (existing) {
+      return existing;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = CAPTURE_PREVIEW_ID;
+
+    const dialog = document.createElement('div');
+    dialog.className = 'bili-capture-preview-dialog';
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'bili-capture-preview-toolbar';
+
+    const info = document.createElement('div');
+    info.className = 'bili-capture-preview-info';
+
+    const prevButton = document.createElement('button');
+    prevButton.type = 'button';
+    prevButton.className = 'bili-capture-preview-btn';
+    prevButton.dataset.previewAction = 'prev';
+    prevButton.textContent = '上一张';
+
+    const nextButton = document.createElement('button');
+    nextButton.type = 'button';
+    nextButton.className = 'bili-capture-preview-btn';
+    nextButton.dataset.previewAction = 'next';
+    nextButton.textContent = '下一张';
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'bili-capture-preview-btn is-danger';
+    deleteButton.dataset.previewAction = 'delete';
+    deleteButton.textContent = '删除';
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'bili-capture-preview-btn';
+    closeButton.dataset.previewAction = 'close';
+    closeButton.textContent = '关闭';
+
+    toolbar.appendChild(info);
+    toolbar.appendChild(prevButton);
+    toolbar.appendChild(nextButton);
+    toolbar.appendChild(deleteButton);
+    toolbar.appendChild(closeButton);
+
+    const stage = document.createElement('div');
+    stage.className = 'bili-capture-preview-stage';
+
+    const image = document.createElement('img');
+    image.className = 'bili-capture-preview-image';
+    image.alt = '预览画面';
+    stage.appendChild(image);
+
+    dialog.appendChild(toolbar);
+    dialog.appendChild(stage);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) {
+        closeCapturePreview();
+      }
+    });
+
+    prevButton.addEventListener('click', () => {
+      if (state.capturePreviewIndex > 0) {
+        state.capturePreviewIndex -= 1;
+        syncCapturePreview();
+      }
+    });
+
+    nextButton.addEventListener('click', () => {
+      if (state.capturePreviewIndex < state.captureItems.length - 1) {
+        state.capturePreviewIndex += 1;
+        syncCapturePreview();
+      }
+    });
+
+    deleteButton.addEventListener('click', () => {
+      const panelElement = panel || document.getElementById(PANEL_ID);
+      if (panelElement) {
+        deleteCaptureItemAt(panelElement, state.capturePreviewIndex);
+      }
+    });
+
+    closeButton.addEventListener('click', () => {
+      closeCapturePreview();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (!overlay.classList.contains('is-open')) {
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        closeCapturePreview();
+        return;
+      }
+
+      if (event.key === 'ArrowLeft') {
+        if (state.capturePreviewIndex > 0) {
+          state.capturePreviewIndex -= 1;
+          syncCapturePreview();
+        }
+        return;
+      }
+
+      if (event.key === 'ArrowRight') {
+        if (state.capturePreviewIndex < state.captureItems.length - 1) {
+          state.capturePreviewIndex += 1;
+          syncCapturePreview();
+        }
+        return;
+      }
+
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        const panelElement = panel || document.getElementById(PANEL_ID);
+        if (panelElement) {
+          deleteCaptureItemAt(panelElement, state.capturePreviewIndex);
+        }
+      }
+    });
+
+    return overlay;
+  }
+
+  function syncCapturePreview() {
+    const overlay = document.getElementById(CAPTURE_PREVIEW_ID);
+    if (!overlay) {
+      return;
+    }
+
+    if (state.capturePreviewIndex < 0 || state.capturePreviewIndex >= state.captureItems.length) {
+      closeCapturePreview();
+      return;
+    }
+
+    const item = state.captureItems[state.capturePreviewIndex];
+    const info = overlay.querySelector('.bili-capture-preview-info');
+    const image = overlay.querySelector('.bili-capture-preview-image');
+    const prevButton = overlay.querySelector('[data-preview-action="prev"]');
+    const nextButton = overlay.querySelector('[data-preview-action="next"]');
+
+    if (image) {
+      image.src = item.imageDataUrl;
+      image.alt = `画面 ${state.capturePreviewIndex + 1}`;
+    }
+
+    if (info) {
+      const label = item.label || '未命名';
+      info.textContent = `${state.capturePreviewIndex + 1}/${state.captureItems.length} · ${formatTime(item.time)} · ${label}`;
+    }
+
+    if (prevButton) {
+      prevButton.disabled = state.capturePreviewIndex <= 0;
+    }
+    if (nextButton) {
+      nextButton.disabled = state.capturePreviewIndex >= state.captureItems.length - 1;
+    }
+  }
+
+  function openCapturePreview(panel, index) {
+    if (index < 0 || index >= state.captureItems.length) {
+      return;
+    }
+
+    const overlay = ensureCapturePreviewOverlay(panel);
+    state.capturePreviewIndex = index;
+    overlay.classList.add('is-open');
+    syncCapturePreview();
+  }
+
+  function closeCapturePreview() {
+    const overlay = document.getElementById(CAPTURE_PREVIEW_ID);
+    if (overlay) {
+      overlay.classList.remove('is-open');
+    }
+    state.capturePreviewIndex = -1;
+  }
+
+  function deleteCaptureItemAt(panel, index) {
+    if (index < 0 || index >= state.captureItems.length) {
+      return;
+    }
+
+    state.captureItems.splice(index, 1);
+
+    if (state.captureItems.length === 0) {
+      closeCapturePreview();
+    } else if (state.capturePreviewIndex >= state.captureItems.length) {
+      state.capturePreviewIndex = state.captureItems.length - 1;
+    }
+
+    renderCaptureList(panel);
+    setCaptureStatus(panel, `已删除一张画面，当前有 ${state.captureItems.length} 张。`);
+
+    if (state.capturePreviewIndex >= 0) {
+      syncCapturePreview();
+    }
   }
 
   function clearCapturePendingShot() {
@@ -1211,6 +1606,7 @@
   function clearCaptureItems(panel) {
     state.captureItems = [];
     state.captureLastShotAt = -Infinity;
+    closeCapturePreview();
     setCaptureStatus(panel, '已清空画面采集结果。');
     renderCaptureList(panel);
   }
@@ -1218,6 +1614,7 @@
   function buildPanel() {
     const existing = document.getElementById(PANEL_ID);
     if (existing) {
+      ensureCapturePreviewOverlay(existing);
       updateCaptureButtons(existing);
       return existing;
     }
@@ -1272,15 +1669,23 @@
     const captureControls = document.createElement('div');
     captureControls.className = 'bili-transcript-capture-controls';
 
+    const capturePrimaryRow = document.createElement('div');
+    capturePrimaryRow.className = 'bili-capture-controls-row';
+
+    const captureExportRow = document.createElement('div');
+    captureExportRow.className = 'bili-capture-controls-row';
+
     const startCaptureButton = createButton('开始采集', () => {
       startAutoCapture(panel);
     });
     startCaptureButton.dataset.captureAction = 'start';
+    startCaptureButton.classList.add('bili-btn-primary');
 
     const stopCaptureButton = createButton('停止', () => {
       stopAutoCapture(panel);
     });
     stopCaptureButton.dataset.captureAction = 'stop';
+    stopCaptureButton.classList.add('bili-btn-stop');
 
     const snapshotButton = createButton('手动截取', () => {
       try {
@@ -1291,27 +1696,35 @@
       }
     });
     snapshotButton.dataset.captureAction = 'snapshot';
+    snapshotButton.classList.add('bili-btn-capture');
 
     const exportButton = createButton('导出PPTX', () => {
       exportCaptureSlides(panel);
     });
     exportButton.dataset.captureAction = 'export';
+    exportButton.classList.add('bili-btn-export');
 
     const exportHtmlButton = createButton('导出HTML', () => {
       exportCaptureDocument(panel);
     });
+    exportHtmlButton.classList.add('bili-btn-export-html');
 
     const clearButton = createButton('清空', () => {
       clearCaptureItems(panel);
     });
     clearButton.dataset.captureAction = 'clear';
+    clearButton.classList.add('bili-btn-danger');
 
-    captureControls.appendChild(startCaptureButton);
-    captureControls.appendChild(stopCaptureButton);
-    captureControls.appendChild(snapshotButton);
-    captureControls.appendChild(exportButton);
-    captureControls.appendChild(exportHtmlButton);
-    captureControls.appendChild(clearButton);
+    capturePrimaryRow.appendChild(startCaptureButton);
+    capturePrimaryRow.appendChild(stopCaptureButton);
+    capturePrimaryRow.appendChild(snapshotButton);
+
+    captureExportRow.appendChild(exportButton);
+    captureExportRow.appendChild(exportHtmlButton);
+    captureExportRow.appendChild(clearButton);
+
+    captureControls.appendChild(capturePrimaryRow);
+    captureControls.appendChild(captureExportRow);
 
     const captureStatus = document.createElement('div');
     captureStatus.className = 'bili-capture-status';
@@ -1338,12 +1751,72 @@
       panel.classList.add('is-collapsed');
       toggle.textContent = '展开';
     }
+    applyPanelPosition(panel, persistedState);
 
     document.body.appendChild(panel);
+    ensureCapturePreviewOverlay(panel);
     renderCaptureList(panel);
     updateCaptureButtons(panel);
+    setupPanelDragging(panel);
     setupPanelResizing(panel);
     return panel;
+  }
+
+  function setupPanelDragging(panel) {
+    const header = panel.querySelector('.bili-transcript-header');
+    if (!header) {
+      return;
+    }
+
+    let dragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    const onMouseDown = (event) => {
+      if (window.matchMedia('(max-width: 960px)').matches) {
+        return;
+      }
+
+      if (event.target instanceof Element && event.target.closest('button, select, input, textarea, a')) {
+        return;
+      }
+
+      const rect = panel.getBoundingClientRect();
+      dragging = true;
+      offsetX = event.clientX - rect.left;
+      offsetY = event.clientY - rect.top;
+
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+      event.preventDefault();
+    };
+
+    const onMouseMove = (event) => {
+      if (!dragging) {
+        return;
+      }
+
+      const maxLeft = Math.max(0, window.innerWidth - panel.offsetWidth);
+      const maxTop = Math.max(0, window.innerHeight - panel.offsetHeight);
+      const nextLeft = Math.min(Math.max(0, event.clientX - offsetX), maxLeft);
+      const nextTop = Math.min(Math.max(0, event.clientY - offsetY), maxTop);
+
+      panel.style.left = `${nextLeft}px`;
+      panel.style.top = `${nextTop}px`;
+    };
+
+    const onMouseUp = () => {
+      if (!dragging) {
+        return;
+      }
+
+      dragging = false;
+      savePanelState(panel);
+    };
+
+    header.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
   }
 
   function setupPanelResizing(panel) {
