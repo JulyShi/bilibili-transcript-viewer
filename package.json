@@ -1,0 +1,10 @@
+{
+  "name": "bilibili-transcript-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone userscript project for showing Bilibili subtitles in a synced transcript panel.",
+  "scripts": {
+    "check": "node --check src/bilibili-transcript-viewer.user.js",
+    "build": "mkdir -p dist && cp src/bilibili-transcript-viewer.user.js dist/bilibili-transcript-viewer.user.js"
+  }
+}
