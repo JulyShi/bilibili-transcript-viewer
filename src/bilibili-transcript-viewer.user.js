@@ -50,7 +50,7 @@
     lastUrl: location.href,
     routeWatcherStarted: false,
     captureItems: [],
-    captureStatus: '准备好后点击“开始采集”，脚本会按语音片段自动截取画面。',
+    captureStatus: '点击“开始自动采集”后，脚本会按字幕或语音片段自动截取画面。',
     captureRunning: false,
     captureLoopHandle: 0,
     capturePendingShotTimer: null,
@@ -155,6 +155,26 @@
         flex-direction: column;
         gap: 12px;
         padding: 14px 16px 16px;
+      }
+
+      #${PANEL_ID} .bili-transcript-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      #${PANEL_ID} .bili-transcript-section-heading {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.4;
+        font-weight: 700;
+        color: #4d3a2c;
+      }
+
+      #${PANEL_ID} .bili-transcript-section-note {
+        color: var(--bili-text-subtle);
+        font-size: 12px;
+        line-height: 1.5;
       }
 
       #${PANEL_ID}.is-collapsed .bili-transcript-body {
@@ -364,6 +384,7 @@
       #${CAPTURE_PREVIEW_ID} .bili-capture-preview-dialog {
         width: min(1200px, calc(100vw - 40px));
         max-height: calc(100vh - 40px);
+        height: min(920px, calc(100vh - 40px));
         display: flex;
         flex-direction: column;
         border-radius: 16px;
@@ -420,14 +441,14 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 14px;
+        padding: 18px;
         min-height: 0;
         flex: 1;
       }
 
       #${CAPTURE_PREVIEW_ID} .bili-capture-preview-image {
         max-width: 100%;
-        max-height: calc(100vh - 160px);
+        max-height: calc(100vh - 110px);
         border-radius: 10px;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
         background: rgba(255, 255, 255, 0.08);
@@ -707,7 +728,7 @@
     if (state.captureItems.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'bili-capture-empty';
-      empty.textContent = '还没有采集到画面。开始播放后点击“开始采集”，脚本会按语音片段自动截取。';
+      empty.textContent = '还没有采集到画面。播放视频后点击“开始自动采集”，脚本会按字幕或语音片段自动截取。';
       list.appendChild(empty);
       updateCaptureButtons(panel);
       return;
@@ -1112,7 +1133,7 @@
   function resetCaptureState(panel) {
     teardownCaptureAudio();
     state.captureItems = [];
-    state.captureStatus = '准备好后点击“开始采集”，脚本会按语音片段自动截取画面。';
+    state.captureStatus = '点击“开始自动采集”后，脚本会按字幕或语音片段自动截取画面。';
     state.captureMode = 'audio';
     state.captureSeenCueIndices = new Set();
     state.capturePendingCueIndex = -1;
@@ -1573,7 +1594,7 @@
     if (state.cues.length > 0) {
       state.captureRunning = true;
       state.captureMode = 'cue';
-      setCaptureStatus(panel, `正在按字幕逐句采集，共 ${state.cues.length} 句。请从开头播放，脚本会每句截一张图。`);
+      setCaptureStatus(panel, `正在按字幕逐句采集，共 ${state.cues.length} 句。建议从头播放，脚本会尽量为每句保留一张代表画面。`);
       updateCaptureButtons(panel);
       startCaptureLoop(panel);
       return;
@@ -1598,7 +1619,7 @@
       video.currentTime = 0;
       state.capturePreRollSamples = 0;
       state.captureFirstVoiceSegmentStarted = false;
-      setCaptureStatus(panel, `正在按语音段采集，脚本会在每段语音结束后选一张代表画面。当前已记录 ${state.captureItems.length} 张。`);
+      setCaptureStatus(panel, `正在按语音段采集，脚本会在每段语音结束后挑选一张代表画面。当前已记录 ${state.captureItems.length} 张。`);
       updateCaptureButtons(panel);
       startCaptureLoop(panel);
     } catch (error) {
@@ -1609,7 +1630,7 @@
 
   function stopAutoCapture(panel) {
     if (!state.captureRunning) {
-      setCaptureStatus(panel, state.captureItems.length > 0 ? `已暂停采集，当前有 ${state.captureItems.length} 张画面。` : '采集尚未开始。');
+      setCaptureStatus(panel, state.captureItems.length > 0 ? `当前已暂停采集，已保留 ${state.captureItems.length} 张画面。` : '还没有开始采集。');
       updateCaptureButtons(panel);
       return;
     }
@@ -1634,8 +1655,8 @@
       panel,
       state.captureItems.length > 0
         ? state.captureMode === 'cue'
-          ? `已暂停逐句采集，当前有 ${state.captureItems.length} 张画面。`
-          : `已暂停采集，当前有 ${state.captureItems.length} 张画面。`
+          ? `已暂停逐句采集，当前已保留 ${state.captureItems.length} 张画面。`
+          : `已暂停采集，当前已保留 ${state.captureItems.length} 张画面。`
         : '已暂停采集。'
     );
     updateCaptureButtons(panel);
@@ -1754,7 +1775,7 @@
     state.captureItems = [];
     state.captureLastShotAt = -Infinity;
     closeCapturePreview();
-    setCaptureStatus(panel, '已清空画面采集结果。');
+    setCaptureStatus(panel, '已清空当前采集结果。');
     renderCaptureList(panel);
   }
 
@@ -1787,6 +1808,17 @@
     const body = document.createElement('div');
     body.className = 'bili-transcript-body';
 
+    const transcriptSection = document.createElement('section');
+    transcriptSection.className = 'bili-transcript-section';
+
+    const transcriptHeading = document.createElement('h2');
+    transcriptHeading.className = 'bili-transcript-section-heading';
+    transcriptHeading.textContent = '字幕/台词阅读';
+
+    const transcriptNote = document.createElement('div');
+    transcriptNote.className = 'bili-transcript-section-note';
+    transcriptNote.textContent = '自动跟随播放进度高亮当前句，也可以点击任意一句快速跳转。';
+
     const current = document.createElement('div');
     current.className = 'bili-transcript-current is-empty';
     current.textContent = '正在加载字幕...';
@@ -1811,7 +1843,11 @@
 
     const captureHeading = document.createElement('h2');
     captureHeading.className = 'bili-capture-heading';
-    captureHeading.textContent = '动画台词本采集';
+    captureHeading.textContent = '画面采集';
+
+    const captureNote = document.createElement('div');
+    captureNote.className = 'bili-transcript-section-note';
+    captureNote.textContent = '有字幕时按句采集，没字幕时按语音片段采集；可手动补抓、预览和删除。';
 
     const captureControls = document.createElement('div');
     captureControls.className = 'bili-transcript-capture-controls';
@@ -1822,19 +1858,19 @@
     const captureExportRow = document.createElement('div');
     captureExportRow.className = 'bili-capture-controls-row';
 
-    const startCaptureButton = createButton('开始采集', () => {
+    const startCaptureButton = createButton('开始自动采集', () => {
       startAutoCapture(panel);
     });
     startCaptureButton.dataset.captureAction = 'start';
     startCaptureButton.classList.add('bili-btn-primary');
 
-    const stopCaptureButton = createButton('停止', () => {
+    const stopCaptureButton = createButton('暂停采集', () => {
       stopAutoCapture(panel);
     });
     stopCaptureButton.dataset.captureAction = 'stop';
     stopCaptureButton.classList.add('bili-btn-stop');
 
-    const snapshotButton = createButton('手动截取', () => {
+    const snapshotButton = createButton('手动截图', () => {
       try {
         captureCurrentFrame(panel, 'manual');
       } catch (error) {
@@ -1845,18 +1881,18 @@
     snapshotButton.dataset.captureAction = 'snapshot';
     snapshotButton.classList.add('bili-btn-capture');
 
-    const exportButton = createButton('导出PPTX', () => {
+    const exportButton = createButton('导出 PPTX', () => {
       exportCaptureSlides(panel);
     });
     exportButton.dataset.captureAction = 'export';
     exportButton.classList.add('bili-btn-export');
 
-    const exportHtmlButton = createButton('导出HTML', () => {
+    const exportHtmlButton = createButton('导出 HTML', () => {
       exportCaptureDocument(panel);
     });
     exportHtmlButton.classList.add('bili-btn-export-html');
 
-    const clearButton = createButton('清空', () => {
+    const clearButton = createButton('清空结果', () => {
       clearCaptureItems(panel);
     });
     clearButton.dataset.captureAction = 'clear';
@@ -1880,11 +1916,15 @@
     const captureList = document.createElement('div');
     captureList.className = 'bili-capture-list';
 
-    body.appendChild(current);
-    body.appendChild(controls);
-    body.appendChild(status);
-    body.appendChild(list);
+    transcriptSection.appendChild(transcriptHeading);
+    transcriptSection.appendChild(transcriptNote);
+    transcriptSection.appendChild(current);
+    transcriptSection.appendChild(controls);
+    transcriptSection.appendChild(status);
+    transcriptSection.appendChild(list);
+    body.appendChild(transcriptSection);
     captureSection.appendChild(captureHeading);
+    captureSection.appendChild(captureNote);
     captureSection.appendChild(captureControls);
     captureSection.appendChild(captureStatus);
     captureSection.appendChild(captureList);
@@ -2020,7 +2060,7 @@
 
   function setCurrentText(panel, text) {
     const current = panel.querySelector('.bili-transcript-current');
-    current.textContent = text || '等待台词...';
+    current.textContent = text || '等待当前台词...';
     current.classList.toggle('is-empty', !text);
   }
 
@@ -2230,7 +2270,7 @@
     const tracks = await getSubtitleTracks();
 
     if (tracks.length === 0) {
-      renderStatus(panel, '这个视频没有公开字幕，暂时无法显示台词。');
+      renderStatus(panel, '这个视频没有公开字幕，暂时无法显示“字幕/台词阅读”内容。');
       return;
     }
 
